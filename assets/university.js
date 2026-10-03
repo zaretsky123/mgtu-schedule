@@ -1,6 +1,6 @@
 import {i as getReact, t as getDOM} from './framework-DjPHiq1u.js';
-import Schedule from './page-University.js?v=20261003-settings';
-import {Icon} from './university-ui.js?v=20261003-settings';
+import Schedule from './page-University.js?v=20261003-gear';
+import {Icon} from './university-ui.js?v=20261003-gear';
 
 const React = getReact();
 const {createElement:h, useState, useEffect, useRef} = React;
