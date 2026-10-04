@@ -1,0 +1,85 @@
+name: Обновление расписания МГТУ
+
+on:
+  schedule:
+    - cron: "43 2 * * *"
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/update-university.yml
+      - scripts/**
+  workflow_dispatch:
+    inputs:
+      groups:
+        description: "gradual / connected / all / ID групп через запятую"
+        type: string
+        default: gradual
+
+permissions:
+  contents: write
+  pages: write
+
+concurrency:
+  group: mgtu-university-schedules
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Проверить обработчик
+        run: python -m unittest discover -s scripts -p 'test_university.py'
+      - name: Получить расписания и подключить следующую партию
+        id: collect
+        continue-on-error: true
+        env:
+          GROUP_SELECTION: ${{ inputs.groups || 'gradual' }}
+        run: |
+          case "$GROUP_SELECTION" in
+            gradual) python scripts/update_university.py --batch-size 40 ;;
+            connected) python scripts/update_university.py --ready-only ;;
+            all) python scripts/update_university.py ;;
+            *) python scripts/update_university.py --groups "$GROUP_SELECTION" ;;
+          esac
+      - name: Сохранить успешные расписания и обновить сайт
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git add university-data
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Автоматическое обновление расписаний МГТУ"
+          git pull --rebase origin main
+          git push origin HEAD:main
+          curl --fail-with-body --retry 3 -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/pages/builds"
+      - name: Сводка подключения
+        if: always()
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from collections import Counter
+          data = json.load(open('university-data/catalogue.json'))
+          groups = data['groups']
+          print('## Расписания МГТУ')
+          print(f"Подключено: **{sum(bool(g.get('available')) for g in groups)}** из {len(groups)} записей источника.")
+          print('Новые записи проверяются партиями по 40; уже подключённые — ежедневно.')
+          print('\n| Подразделение | Подключено |\n|---|---:|')
+          counts = Counter(f for g in groups if g.get('available') for f in g['faculties'])
+          for faculty, count in sorted(counts.items()): print(f'| {faculty} | {count} |')
+          PY
+      - name: Сообщить об ошибке источника или ранее подключённой группы
+        if: steps.collect.outcome == 'failure'
+        run: |
+          echo "::error::Часть расписаний не удалось обновить. Последние успешные версии сохранены; подробности в шаге получения данных."
+          exit 1

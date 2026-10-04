@@ -1,5 +1,5 @@
 import {i as getReact, t as getDOM} from './framework-DjPHiq1u.js';
-import Schedule from './page-University.js?v=20261003-gear';
+import Schedule from './page-University.js?v=20261004-dates';
 import {Icon} from './university-ui.js?v=20261003-gear';
 
 const React = getReact();
