@@ -7,6 +7,7 @@ const {createElement:h, useState, useEffect, useRef} = React;
 const storage = {
   read(key, fallback=null) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } },
   write(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} },
+  remove(key) { try { localStorage.removeItem(key); } catch {} },
 };
 const base = new URL('../university-data/', import.meta.url);
 const memory = new Map();
@@ -82,14 +83,12 @@ function App() {
   const [subgroup,setSubgroup]=useState('all');
   const [preferences,setPreferences]=useState(readPreferences);
   const [savedIds,setSavedIds]=useState(readSavedGroups);
-  const [primaryId,setPrimaryId]=useState(()=>storage.read('mgtu-primary-group'));
   const request=useRef(0);
 
   function rememberGroup(id) {
     setSavedIds(previous=>{const next=previous.includes(id)?previous:[...previous,id];storage.write('mgtu-saved-groups',next);return next;});
-    setPrimaryId(previous=>{const next=previous||id;storage.write('mgtu-primary-group',next);return next;});
   }
-  async function choose(group,stayInSaved=false) {
+  async function choose(group) {
     const token=++request.current;
     setLoading(group.id);setError('');
     try {
@@ -109,7 +108,7 @@ function App() {
       const saved=storage.read(`mgtu-subgroup:${group.id}`,'all');
       const subgroups=[...new Set(payload.lessons.map(x=>x.subgroup).filter(Boolean))];
       setSubgroup(saved==='all'||subgroups.includes(Number(saved))?saved:'all');
-      setCurrent(group);setData(payload);setOffline(cached);setDialog(stayInSaved?'saved-groups':null);
+      setCurrent(group);setData(payload);setOffline(cached);setDialog(null);
       rememberGroup(group.id);storage.write('mgtu-group',group.id);
       document.title=`${group.name} · Расписание МГТУ`;
     } catch(failure) {if(token===request.current)setError(failure.message);}
@@ -123,8 +122,11 @@ function App() {
       catch(failure) {list=storage.read('mgtu-catalogue');if(!list)throw failure;}
       if (!Array.isArray(list.groups)) throw new Error('Не удалось прочитать список групп');
       setCatalogue(list);
-      const remembered=storage.read('mgtu-primary-group')||storage.read('mgtu-group');
-      const group=list.groups.find(g=>g.id===remembered&&g.available);
+      // Read the old primary value only once, as a fallback for older browsers.
+      const remembered=storage.read('mgtu-group')||storage.read('mgtu-primary-group');
+      storage.remove('mgtu-primary-group');
+      const group=list.groups.find(g=>g.id===remembered&&g.available)
+        ||readSavedGroups().map(id=>list.groups.find(g=>g.id===id&&g.available)).find(Boolean);
       if(group)choose(group);
     } catch(failure) {setCatalogueError(failure.message);}
   }
@@ -139,37 +141,36 @@ function App() {
   const subgroupLabel=subgroups.length?subgroup==='all'?'Все подгруппы':`Подгруппа ${subgroup}`:'Общие занятия';
   function changeSubgroup(value) {setSubgroup(value);storage.write(`mgtu-subgroup:${current.id}`,value);}
   function changePreference(key,value) {setPreferences(previous=>{const next={...previous,[key]:value};storage.write('mgtu-preferences',next);return next;});}
-  function setPrimary(id) {setPrimaryId(id);storage.write('mgtu-primary-group',id);}
   function removeGroup(id) {
     const next=savedIds.filter(x=>x!==id);setSavedIds(next);storage.write('mgtu-saved-groups',next);
-    const primary=primaryId===id?(next[0]??null):primaryId;if(primaryId===id)setPrimary(primary);
     if(current?.id===id){
-      ++request.current;setCurrent(null);setData(null);storage.write('mgtu-group',null);
-      const nextGroup=groups.find(g=>g.id===primary&&g.available);
-      if(nextGroup)choose(nextGroup,true);else{setSelectionOrigin(null);setDialog('groups');}
+      ++request.current;setCurrent(null);setData(null);setOffline(false);setError('');storage.remove('mgtu-group');
+      document.title='Расписание МГТУ';
+      const nextGroup=next.map(groupId=>groups.find(g=>g.id===groupId&&g.available)).find(Boolean);
+      if(nextGroup)choose(nextGroup);else setDialog('saved-groups');
     }
   }
-  function openSearch(origin=null) {setSelectionOrigin(origin);setError('');setQuery('');setDialog('groups');}
+  function openSearch(origin=null) {setSelectionOrigin(origin);setError('');setQuery('');setFaculty('all');setDialog('groups');}
+  function openSavedGroups() {setError('');setDialog('saved-groups');}
   const close=()=>setDialog(null);
   const stamp=value=>new Date(value).toLocaleString('ru-RU',{timeZone:'Europe/Moscow'});
 
   return h(React.Fragment,null,
     current&&data&&h(Schedule,{key:current.id,lessons:filtered,groupId:current.id,groupLabel:current.name,
       facultyLabel:'Майкопский государственный технологический университет',subgroupLabel,...preferences,
-      onChooseGroup:()=>openSearch(),onSettings:()=>setDialog('settings')}),
+      onChooseGroup:openSavedGroups,onSettings:()=>setDialog('settings')}),
     !current&&h('main',{className:'uni-welcome'},h('span',{className:'eyebrow'},'МГТУ'),h('h1',null,'Ваше расписание'),h('p',null,'Все пары, аудитории и преподаватели — в одном месте.')),
     current&&(offline||current.error)&&h('div',{className:'data-notice',role:'status'},offline?'Нет соединения. Показана сохранённая версия расписания.':'Последнее обновление не удалось. Показана последняя успешная версия.'),
     dialog==='groups'&&h(Dialog,{title:'Выберите группу',onClose:current||selectionOrigin?()=>setDialog(selectionOrigin):undefined},
       h('label',{className:'uni-field'},'Поиск группы',h('input',{type:'search',placeholder:'Например, СТ-11',value:query,onChange:e=>setQuery(e.target.value)})),
       h('label',{className:'uni-field'},'Факультет или подразделение',h('select',{'aria-label':'Факультет или подразделение',value:faculty,onChange:e=>setFaculty(e.target.value)},h('option',{value:'all'},'Все подразделения'),faculties.map(f=>h('option',{key:f,value:f},f)))),
-      savedGroups.length>0&&h('div',{className:'saved-shortcuts','aria-label':'Сохранённые группы'},savedGroups.map(g=>h('button',{key:g.id,type:'button',disabled:loading!==null||!g.available,onClick:()=>choose(g,selectionOrigin==='saved-groups')},g.name))),
       h('div',{role:'status',className:'uni-error'},catalogueError||error),
       catalogueError&&h('button',{className:'uni-primary',onClick:loadCatalogue},'Повторить'),
       !catalogue&&!catalogueError&&h('p',{role:'status'},'Загружаем список групп…'),
-      catalogue&&h('div',{className:'group-results'},matching.length?matching.map(g=>h('button',{key:g.id,className:'group-result',disabled:!g.available||loading!==null,onClick:()=>choose(g,selectionOrigin==='saved-groups')},h('strong',null,g.name),h('span',null,g.available?loading===g.id?'Открываем расписание…':g.faculties.join(' · '):'Расписание пока не подключено'))):h('p',null,'Группа не найдена. Попробуйте другое название.'))),
+      catalogue&&h('div',{className:'group-results'},matching.length?matching.map(g=>h('button',{key:g.id,className:'group-result',disabled:!g.available||loading!==null,onClick:()=>choose(g)},h('strong',null,g.name),h('span',null,g.available?loading===g.id?'Открываем расписание…':g.faculties.join(' · '):'Расписание пока не подключено'))):h('p',null,'Группа не найдена. Попробуйте другое название.'))),
     dialog==='settings'&&current&&h(Screen,{title:'Настройки',onBack:close},
       h('h2',{className:'settings-section-title'},'Расписание'),
-      h('button',{type:'button',className:'setting-row',onClick:()=>{setError('');setDialog('saved-groups');}},h(Icon,{name:'groups'}),h('span',{className:'setting-copy'},h('strong',null,'Сохранённые группы'),h('small',null,`Сейчас: ${current.name}`)),h('span',{className:'setting-count'},savedGroups.length),h(Icon,{name:'chevron'})),
+      h('button',{type:'button',className:'setting-row',onClick:openSavedGroups},h(Icon,{name:'groups'}),h('span',{className:'setting-copy'},h('strong',null,'Мои расписания'),h('small',null,`Сейчас: ${current.name}`)),h('span',{className:'setting-count'},savedGroups.length),h(Icon,{name:'chevron'})),
       subgroups.length>0&&h('label',{className:'setting-row subgroup-setting'},h(Icon,{name:'groups'}),h('span',{className:'setting-copy'},h('strong',null,'Подгруппа'),h('small',null,'Общие занятия видны всегда')),h('select',{'aria-label':'Подгруппа',value:subgroup,onChange:e=>changeSubgroup(e.target.value)},h('option',{value:'all'},'Все'),subgroups.map(n=>h('option',{key:n,value:String(n)},`Подгруппа ${n}`)))),
       h('h2',{className:'settings-section-title'},'Отображение'),
       h(SwitchRow,{name:'compact',label:'Компактный вид',hint:'Карточки занимают меньше места',checked:preferences.compactView,onChange:value=>changePreference('compactView',value)}),
@@ -178,13 +179,14 @@ function App() {
       h('h2',{className:'settings-section-title'},'Обновление расписания'),
       h('div',{className:'update-panel'},h(Icon,{name:'update'}),h('div',null,h('strong',null,current.error?'Последнее обновление не удалось':'Расписание проверено'),h('p',null,current.error?`Сохранённая версия: ${stamp(data.updatedAt)}`:`Последняя проверка: ${stamp(current.checkedAt||data.updatedAt)}`),h('a',{href:current.source,target:'_blank',rel:'noopener noreferrer',className:'source-link'},'Открыть источник'))),
       h('p',{className:'settings-footnote'},'Настройки и заметки сохраняются на этом устройстве.')),
-    dialog==='saved-groups'&&h(Screen,{title:'Сохранённые группы',onBack:()=>setDialog(current?'settings':'groups')},
+    dialog==='saved-groups'&&h(Screen,{title:'Мои расписания',onBack:()=>setDialog(current?null:'groups')},
       h('button',{className:'uni-primary add-schedule',type:'button',onClick:()=>openSearch('saved-groups')},h(Icon,{name:'plus'}),'Добавить расписание'),
-      h('p',{className:'uni-hint'},'Основная группа открывается при входе на сайт. Нажми на другую группу, чтобы посмотреть её расписание.'),
+      h('p',{className:'uni-hint'},'Выбери расписание, чтобы открыть его. При следующем входе откроется последнее выбранное.'),
       error&&h('p',{className:'uni-error',role:'status'},error),
+      !savedGroups.length&&h('p',{className:'saved-empty'},'Здесь появятся выбранные группы. Нажми «Добавить расписание» и найди свою группу.'),
       h('div',{className:'saved-list'},savedGroups.map(g=>h('article',{key:g.id,className:`saved-card ${g.id===current?.id?'active':''}`},
-        h('button',{type:'button',className:'saved-open',disabled:loading!==null||!g.available,onClick:()=>choose(g),'aria-label':`Открыть ${g.name}`},h('strong',null,g.name),h('span',null,g.id===primaryId?'Основная группа':g.id===current?.id?'Сейчас открыта':g.faculties.join(' · ')),g.id===current?.id&&h(Icon,{name:'check'})),
-        h('div',{className:'saved-actions'},h('button',{type:'button',disabled:loading!==null||g.id===primaryId,onClick:()=>setPrimary(g.id),'aria-label':`Сделать ${g.name} основной`,className:g.id===primaryId?'primary-group':''},h(Icon,{name:'star'})),h('button',{type:'button',disabled:loading!==null,onClick:()=>removeGroup(g.id),'aria-label':`Удалить ${g.name} из сохранённых`},h(Icon,{name:'trash'}))))))));
+        h('button',{type:'button',className:'saved-open',disabled:loading!==null||!g.available,onClick:()=>choose(g),'aria-label':`Открыть ${g.name}`,'aria-current':g.id===current?.id?'true':undefined},h('strong',null,g.name),h('span',null,loading===g.id?'Открываем расписание…':g.id===current?.id?'Сейчас открыто':g.available?g.faculties.join(' · '):'Расписание пока не подключено'),g.id===current?.id&&h(Icon,{name:'check'})),
+        h('button',{type:'button',className:'saved-delete',disabled:loading!==null,onClick:()=>removeGroup(g.id),'aria-label':`Удалить ${g.name} из сохранённых`},h(Icon,{name:'trash'})))))));
 }
 if (typeof document!=='undefined'&&document.getElementById('university-root')) {
   getDOM().hydrateRoot(document.getElementById('university-root'),h(App));
