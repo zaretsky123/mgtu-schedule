@@ -1,5 +1,5 @@
 import {i as getReact, t as getDOM} from './framework-DjPHiq1u.js';
-import Schedule from './page-University.js?v=20261004-dates';
+import Schedule from './page-University.js?v=20261004-settings-only';
 import {Icon} from './university-ui.js?v=20261003-gear';
 import {fetchData, validGroup, validCatalogue} from './data-cache.js';
 
@@ -176,7 +176,7 @@ function App() {
   return h(React.Fragment,null,
     current&&data&&h(Schedule,{key:current.id,lessons:filtered,groupId:current.id,groupLabel:current.name,
       facultyLabel:'Майкопский государственный технологический университет',subgroupLabel,...preferences,
-      onChooseGroup:openSavedGroups,onSettings:()=>setDialog('settings')}),
+      onSettings:()=>setDialog('settings')}),
     !current&&h('main',{className:'uni-welcome'},h('span',{className:'eyebrow'},'МГТУ'),h('h1',null,'Ваше расписание'),h('p',null,'Все пары, аудитории и преподаватели — в одном месте.')),
     current&&(offline||current.error)&&h('div',{className:'data-notice',role:'status'},offline?'Показана сохранённая версия расписания. Обновление сейчас недоступно.':'Последнее обновление не удалось. Показана последняя успешная версия.'),
     dialog==='groups'&&h(Dialog,{title:'Выберите группу',onClose:current||selectionOrigin?()=>setDialog(selectionOrigin):undefined},

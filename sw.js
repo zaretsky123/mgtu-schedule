@@ -1,13 +1,13 @@
 const ROOT = new URL('./', self.location.href);
 const PREFIX = `mgtu-offline-${ROOT.pathname}-`;
-const SHELL = `${PREFIX}20261004-1-shell`;
+const SHELL = `${PREFIX}20261004-2-shell`;
 const DATA = `mgtu-schedule-data-${ROOT.pathname}-v1`;
 const asset = path => new URL(path, ROOT).href;
 const FILES = [
   './', 'index.html', 'favicon.svg', 'manifest.webmanifest',
   'assets/app-icon-192.png', 'assets/app-icon-512.png',
-  'assets/index-DetailedST11.css', 'assets/university.css?v=20261004-offline',
-  'assets/university.js?v=20261004-offline', 'assets/page-University.js?v=20261004-dates',
+  'assets/index-DetailedST11.css', 'assets/university.css?v=20261004-settings-only',
+  'assets/university.js?v=20261004-settings-only', 'assets/page-University.js?v=20261004-settings-only',
   'assets/university-ui.js?v=20261003-gear', 'assets/framework-DjPHiq1u.js',
   'assets/rolldown-runtime-S-ySWqyJ.js', 'assets/data-cache.js', 'assets/lesson-on-date.js',
 ];

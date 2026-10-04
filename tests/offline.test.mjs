@@ -81,5 +81,5 @@ test('worker preserves good group data on offline, HTTP and malformed-response f
   respond=async()=>{throw Error('offline');};
   assert.equal((await request('university-data/groups/43.json')).status,503);
   assert.equal(await (await request('', 'navigate')).text(),'offline shell');
-  assert.equal(await (await request('assets/university.js?v=20261004-offline')).text(),'offline shell');
+  assert.equal(await (await request('favicon.svg')).text(),'offline shell');
 });
