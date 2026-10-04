@@ -1,6 +1,7 @@
 import {i as getReact, t as getDOM} from './framework-DjPHiq1u.js';
 import Schedule from './page-University.js?v=20261004-dates';
 import {Icon} from './university-ui.js?v=20261003-gear';
+import {fetchData, validGroup, validCatalogue} from './data-cache.js';
 
 const React = getReact();
 const {createElement:h, useState, useEffect, useRef} = React;
@@ -20,11 +21,6 @@ function readPreferences() {
 function readSavedGroups() {
   const saved = storage.read('mgtu-saved-groups', []);
   return Array.isArray(saved) ? [...new Set(saved.filter(x=>typeof x==='string'))] : [];
-}
-async function fetchJSON(path) {
-  const response = await fetch(new URL(path, base), {cache:'no-cache'});
-  if (!response.ok) throw new Error('Не удалось загрузить данные. Попробуйте ещё раз.');
-  return response.json();
 }
 export function filterLessons(lessons, subgroup) {
   return lessons.filter(item=>subgroup==='all' || item.subgroup==null || item.subgroup===Number(subgroup));
@@ -83,54 +79,76 @@ function App() {
   const [subgroup,setSubgroup]=useState('all');
   const [preferences,setPreferences]=useState(readPreferences);
   const [savedIds,setSavedIds]=useState(readSavedGroups);
+  const [offlineReady,setOfflineReady]=useState(false);
   const request=useRef(0);
+  const catalogueReady=useRef(false);
+  const activeGroup=useRef(null);
+  activeGroup.current=current;
 
   function rememberGroup(id) {
     setSavedIds(previous=>{const next=previous.includes(id)?previous:[...previous,id];storage.write('mgtu-saved-groups',next);return next;});
   }
-  async function choose(group) {
+  async function choose(group,background=false) {
     const token=++request.current;
-    setLoading(group.id);setError('');
-    try {
-      let payload=memory.get(group.id),cached=false;
-      if (!payload) {
-        try {
-          payload=await fetchJSON(`groups/${group.id}.json`);
-          if (!Array.isArray(payload.lessons)||payload.groupId!==group.id) throw new Error('Неверные данные группы');
-          memory.set(group.id,payload);storage.write(`mgtu-data:${group.id}`,payload);
-        } catch(failure) {
-          payload=storage.read(`mgtu-data:${group.id}`);
-          if (!payload||payload.groupId!==group.id||!Array.isArray(payload.lessons)) throw failure;
-          cached=true;
-        }
-      }
+    let savedPayload=memory.get(group.id)||storage.read(`mgtu-data:${group.id}`);
+    if(!validGroup(savedPayload,group.id))savedPayload=null;
+    setLoading(savedPayload?null:group.id);setError('');
+    function apply(payload,cached,initial) {
       if (token!==request.current) return;
-      const saved=storage.read(`mgtu-subgroup:${group.id}`,'all');
-      const subgroups=[...new Set(payload.lessons.map(x=>x.subgroup).filter(Boolean))];
-      setSubgroup(saved==='all'||subgroups.includes(Number(saved))?saved:'all');
-      setCurrent(group);setData(payload);setOffline(cached);setDialog(null);
-      rememberGroup(group.id);storage.write('mgtu-group',group.id);
-      document.title=`${group.name} · Расписание МГТУ`;
-    } catch(failure) {if(token===request.current)setError(failure.message);}
+      const availableSubgroups=[...new Set(payload.lessons.map(x=>x.subgroup).filter(Boolean))];
+      setData(payload);setOffline(cached);
+      if(initial){
+        const saved=storage.read(`mgtu-subgroup:${group.id}`,'all');
+        setSubgroup(saved==='all'||availableSubgroups.includes(Number(saved))?saved:'all');
+        setCurrent(group);setDialog(null);
+        rememberGroup(group.id);storage.write('mgtu-group',group.id);
+        document.title=`${group.name} · Расписание МГТУ`;
+      }else{
+        setSubgroup(previous=>previous==='all'||availableSubgroups.includes(Number(previous))?previous:'all');
+      }
+    }
+    if(savedPayload)apply(savedPayload,navigator.onLine===false,!background);
+    try {
+      const result=await fetchData(new URL(`groups/${group.id}.json`,base),payload=>validGroup(payload,group.id));
+      if(token!==request.current)return;
+      memory.set(group.id,result.data);storage.write(`mgtu-data:${group.id}`,result.data);
+      apply(result.data,result.cached,!savedPayload);
+    } catch(failure) {
+      if(token===request.current){if(savedPayload)setOffline(true);else setError(failure.name==='AbortError'?'Загрузка заняла слишком много времени. Попробуйте ещё раз.':failure.message);}
+    }
     finally {if(token===request.current)setLoading(null);}
   }
   async function loadCatalogue() {
     setCatalogueError('');
-    try {
-      let list;
-      try {list=await fetchJSON('catalogue.json');storage.write('mgtu-catalogue',list);}
-      catch(failure) {list=storage.read('mgtu-catalogue');if(!list)throw failure;}
-      if (!Array.isArray(list.groups)) throw new Error('Не удалось прочитать список групп');
+    function apply(list){
       setCatalogue(list);
-      // Read the old primary value only once, as a fallback for older browsers.
-      const remembered=storage.read('mgtu-group')||storage.read('mgtu-primary-group');
-      storage.remove('mgtu-primary-group');
-      const group=list.groups.find(g=>g.id===remembered&&g.available)
-        ||readSavedGroups().map(id=>list.groups.find(g=>g.id===id&&g.available)).find(Boolean);
-      if(group)choose(group);
-    } catch(failure) {setCatalogueError(failure.message);}
+      setCurrent(previous=>previous?(list.groups.find(g=>g.id===previous.id)||previous):null);
+      if(!catalogueReady.current){
+        catalogueReady.current=true;
+        const remembered=storage.read('mgtu-group')||storage.read('mgtu-primary-group');
+        storage.remove('mgtu-primary-group');
+        const group=list.groups.find(g=>g.id===remembered&&g.available)
+          ||readSavedGroups().map(id=>list.groups.find(g=>g.id===id&&g.available)).find(Boolean);
+        if(group)choose(group);
+      }
+    }
+    const saved=storage.read('mgtu-catalogue');
+    if(validCatalogue(saved))apply(saved);
+    try {
+      const result=await fetchData(new URL('catalogue.json',base),validCatalogue);
+      storage.write('mgtu-catalogue',result.data);apply(result.data);
+    } catch(failure) {if(!validCatalogue(saved))setCatalogueError(failure.name==='AbortError'?'Не удалось загрузить список групп. Попробуйте ещё раз.':failure.message);}
   }
-  useEffect(()=>{loadCatalogue();},[]);
+  useEffect(()=>{
+    loadCatalogue();
+    const online=()=>{loadCatalogue();if(activeGroup.current)choose(activeGroup.current,true);};
+    window.addEventListener('online',online);
+    if('serviceWorker' in navigator){
+      navigator.serviceWorker.register(new URL('../sw.js',import.meta.url),{scope:new URL('../',import.meta.url).pathname})
+        .then(()=>navigator.serviceWorker.ready).then(()=>setOfflineReady(true)).catch(()=>{});
+    }
+    return()=>window.removeEventListener('online',online);
+  },[]);
   const groups=catalogue?.groups??[];
   const savedGroups=savedIds.map(id=>groups.find(g=>g.id===id)).filter(Boolean);
   const faculties=[...new Set(groups.flatMap(g=>g.faculties))].sort((a,b)=>a.localeCompare(b,'ru'));
@@ -160,14 +178,15 @@ function App() {
       facultyLabel:'Майкопский государственный технологический университет',subgroupLabel,...preferences,
       onChooseGroup:openSavedGroups,onSettings:()=>setDialog('settings')}),
     !current&&h('main',{className:'uni-welcome'},h('span',{className:'eyebrow'},'МГТУ'),h('h1',null,'Ваше расписание'),h('p',null,'Все пары, аудитории и преподаватели — в одном месте.')),
-    current&&(offline||current.error)&&h('div',{className:'data-notice',role:'status'},offline?'Нет соединения. Показана сохранённая версия расписания.':'Последнее обновление не удалось. Показана последняя успешная версия.'),
+    current&&(offline||current.error)&&h('div',{className:'data-notice',role:'status'},offline?'Показана сохранённая версия расписания. Обновление сейчас недоступно.':'Последнее обновление не удалось. Показана последняя успешная версия.'),
     dialog==='groups'&&h(Dialog,{title:'Выберите группу',onClose:current||selectionOrigin?()=>setDialog(selectionOrigin):undefined},
       h('label',{className:'uni-field'},'Поиск группы',h('input',{type:'search',placeholder:'Например, СТ-11',value:query,onChange:e=>setQuery(e.target.value)})),
       h('label',{className:'uni-field'},'Факультет или подразделение',h('select',{'aria-label':'Факультет или подразделение',value:faculty,onChange:e=>setFaculty(e.target.value)},h('option',{value:'all'},'Все подразделения'),faculties.map(f=>h('option',{key:f,value:f},f)))),
       h('div',{role:'status',className:'uni-error'},catalogueError||error),
       catalogueError&&h('button',{className:'uni-primary',onClick:loadCatalogue},'Повторить'),
       !catalogue&&!catalogueError&&h('p',{role:'status'},'Загружаем список групп…'),
-      catalogue&&h('div',{className:'group-results'},matching.length?matching.map(g=>h('button',{key:g.id,className:'group-result',disabled:!g.available||loading!==null,onClick:()=>choose(g)},h('strong',null,g.name),h('span',null,g.available?loading===g.id?'Открываем расписание…':g.faculties.join(' · '):'Расписание пока не подключено'))):h('p',null,'Группа не найдена. Попробуйте другое название.'))),
+      catalogue&&h('p',{className:'uni-hint'},`Подключено ${groups.filter(g=>g.available).length} расписаний. Новые группы добавляются ежедневно.`),
+      catalogue&&h('div',{className:'group-results'},matching.length?matching.map(g=>h('div',{key:g.id,className:'group-entry'},h('button',{className:'group-result',disabled:!g.available||loading!==null,onClick:()=>choose(g)},h('strong',null,g.name),h('span',null,g.available?loading===g.id?'Открываем расписание…':g.faculties.join(' · '):g.connectionState==='empty'?'В источнике нет занятий на этот семестр':g.connectionState==='unsupported'?'Расписание в другом формате':'Расписание пока не подключено')),!g.available&&g.checkedAt&&h('a',{className:'group-source',href:g.source,target:'_blank',rel:'noopener noreferrer'},'Открыть на сайте вуза'))):h('p',null,'Группа не найдена. Попробуйте другое название.'))),
     dialog==='settings'&&current&&h(Screen,{title:'Настройки',onBack:close},
       h('h2',{className:'settings-section-title'},'Расписание'),
       h('button',{type:'button',className:'setting-row',onClick:openSavedGroups},h(Icon,{name:'groups'}),h('span',{className:'setting-copy'},h('strong',null,'Мои расписания'),h('small',null,`Сейчас: ${current.name}`)),h('span',{className:'setting-count'},savedGroups.length),h(Icon,{name:'chevron'})),
@@ -178,6 +197,7 @@ function App() {
       h(SwitchRow,{name:'note',label:'Индикатор заметок',hint:'Значок на предметах с комментарием',checked:preferences.showNoteIndicator,onChange:value=>changePreference('showNoteIndicator',value)}),
       h('h2',{className:'settings-section-title'},'Обновление расписания'),
       h('div',{className:'update-panel'},h(Icon,{name:'update'}),h('div',null,h('strong',null,current.error?'Последнее обновление не удалось':'Расписание проверено'),h('p',null,current.error?`Сохранённая версия: ${stamp(data.updatedAt)}`:`Последняя проверка: ${stamp(current.checkedAt||data.updatedAt)}`),h('a',{href:current.source,target:'_blank',rel:'noopener noreferrer',className:'source-link'},'Открыть источник'))),
+      h('p',{className:'settings-footnote'},offlineReady?'Сайт готов к работе без интернета. Открытые расписания сохраняются на устройстве.':'Для работы без интернета сначала откройте нужные расписания при наличии сети.'),
       h('p',{className:'settings-footnote'},'Настройки и заметки сохраняются на этом устройстве.')),
     dialog==='saved-groups'&&h(Screen,{title:'Мои расписания',onBack:()=>setDialog(current?null:'groups')},
       h('button',{className:'uni-primary add-schedule',type:'button',onClick:()=>openSearch('saved-groups')},h(Icon,{name:'plus'}),'Добавить расписание'),
